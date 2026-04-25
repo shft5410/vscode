@@ -359,4 +359,88 @@ suite('Sticky Scroll Tests', () => {
 			});
 		});
 	});
+
+	function getTextWithOneLongLine(length: number): string {
+		return [
+			'a'.repeat(length),
+			'normal line',
+			'normal line'
+		].join('\n');
+	}
+
+	function documentSymbolProviderForOneLongLineTestModel() {
+		return {
+			provideDocumentSymbols() {
+				return [{
+					name: 'longLine1',
+					detail: 'longLine1',
+					kind: SymbolKind.Function,
+					tags: [],
+					range: { startLineNumber: 1, endLineNumber: 3, startColumn: 1, endColumn: 1 },
+					selectionRange: { startLineNumber: 1, endLineNumber: 1, startColumn: 1, endColumn: 1 }
+				} as DocumentSymbol];
+			}
+		};
+	}
+
+	async function simulateUserClickInteraction(element: Element) {
+		element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+		element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+		element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+	}
+
+	test('Sticky scroll handles truncation, show more, and revealing line on click', async () => {
+		return runWithFakedTimers({ useFakeTimers: true }, async () => {
+			const model = createTextModel(getTextWithOneLongLine(2000));
+			await withAsyncTestCodeEditor(model, {
+				stickyScroll: {
+					enabled: true,
+					maxLineCount: 5,
+					defaultModel: 'outlineModel'
+				},
+				envConfig: {
+					outerHeight: 500
+				},
+				serviceCollection,
+				stopRenderingLineAfter: 1000 // Render limit is lower than the length of the first line
+			}, async (editor, _viewModel, instantiationService) => {
+
+				const languageService = instantiationService.get(ILanguageFeaturesService);
+				disposables.add(languageService.documentSymbolProvider.register('*', documentSymbolProviderForOneLongLineTestModel()));
+
+				const stickyScrollController: StickyScrollController = editor.registerAndInstantiateContribution(StickyScrollController.ID, StickyScrollController);
+				await stickyScrollController.stickyScrollCandidateProvider.update();
+
+				editor.setScrollTop(1); // Simulate scroll to trigger sticky line
+				await Promise.resolve(); // Wait for layout update
+				const widgetDom = stickyScrollController['_stickyScrollWidget'].getDomNode();
+
+				// Verify that the sticky line is rendered with truncated content and a "Show more" element
+				let stickyLine = widgetDom.querySelector('.sticky-widget-lines [data-sticky-line-index="0"]');
+				assert.ok(stickyLine, 'Sticky line should be rendered');
+				const showMoreSpanElement = stickyLine.querySelector('.mtkoverflow');
+				assert.ok(showMoreSpanElement, 'Show more element should be rendered');
+				assert.strictEqual(stickyLine.textContent, 'a'.repeat(1000) + showMoreSpanElement.textContent, 'Sticky line should be truncated to render limit');
+
+				// Verify that the sticky line is re-rendered with the full content after clicking "Show more"
+				await simulateUserClickInteraction(showMoreSpanElement);
+				await Promise.resolve(); // Wait for layout update
+				stickyLine = widgetDom.querySelector('.sticky-widget-lines [data-sticky-line-index="0"]');
+				assert.ok(stickyLine, 'Updated sticky line should be rendered');
+				assert.strictEqual(stickyLine.textContent, 'a'.repeat(2000), 'Updated sticky line should show full content');
+				assert.ok(!stickyScrollController['_positionRevealed'], 'Position should not be revealed after clicking show more');
+
+				// Verify that clicking the content of the sticky line reveals the position in the editor. This ensures
+				// that the interlock which prevents revealing the line when clicking "Show more" is cleaned up properly
+				const firstContentSpanElement = stickyLine.querySelector('span[class*="mtk"]');
+				assert.ok(firstContentSpanElement, 'Content element should be present in the sticky line');
+				await simulateUserClickInteraction(firstContentSpanElement);
+				assert.ok(stickyScrollController['_positionRevealed'], 'Editor should have revealed the first line');
+
+				stickyScrollController.dispose();
+				stickyScrollController.stickyScrollCandidateProvider.dispose();
+				model.dispose();
+			});
+		});
+	});
 });

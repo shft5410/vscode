@@ -70,7 +70,8 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 	private _enabled = false;
 	private _focused = false;
 	private _positionRevealed = false;
-	private _onMouseDown = false;
+	private _suppressNextFocus = false;
+	private _suppressNextClick = false;
 	private _endLineNumbers: number[] = [];
 	private _showEndForLine: number | undefined;
 	private _minRebuildFromLine: number | undefined;
@@ -140,10 +141,6 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 			this.focus();
 		}));
 		this._registerMouseListeners();
-		// Suppose that mouse down on the sticky scroll, then do not focus on the sticky scroll because this will be followed by the revealing of a position
-		this._register(dom.addDisposableListener(stickyScrollDomNode, dom.EventType.MOUSE_DOWN, (e) => {
-			this._onMouseDown = true;
-		}));
 		this._register(this._stickyScrollWidget.onDidChangeStickyScrollHeight((e) => {
 			this._onDidChangeStickyScrollHeight.fire(e);
 		}));
@@ -172,7 +169,7 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 		this._focusDisposableStore?.dispose();
 		this._focused = false;
 		this._positionRevealed = false;
-		this._onMouseDown = false;
+		this._suppressNextFocus = false;
 	}
 
 	public isFocused(): boolean {
@@ -181,8 +178,8 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 
 	public focus(): void {
 		// If the mouse is down, do not focus on the sticky scroll
-		if (this._onMouseDown) {
-			this._onMouseDown = false;
+		if (this._suppressNextFocus) {
+			this._suppressNextFocus = false;
 			this._editor.focus();
 			return;
 		}
@@ -279,6 +276,10 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 
 		const stickyScrollWidgetDomNode = this._stickyScrollWidget.getDomNode();
 		this._register(dom.addStandardDisposableListener(stickyScrollWidgetDomNode, dom.EventType.CLICK, (mouseEvent: IMouseEvent) => {
+			if (this._suppressNextClick) {
+				this._suppressNextClick = false;
+				return;
+			}
 			if (mouseEvent.ctrlKey || mouseEvent.altKey || mouseEvent.metaKey) {
 				// modifier pressed
 				return;
@@ -319,6 +320,27 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 				position = new Position(lineNumber, 1);
 			}
 			this._revealPosition(position);
+		}));
+		this._register(dom.addStandardDisposableListener(stickyScrollWidgetDomNode, dom.EventType.MOUSE_DOWN, (mouseEvent: IMouseEvent) => {
+			// On mouse down, suppress focusing the sticky scroll. The mouse down will either be followed by revealing a
+			// position or by disabling the line length render limit. In both cases, we want to keep the focus in the editor
+			this._suppressNextFocus = true;
+
+			this._suppressNextClick = false;
+			const position = this._stickyScrollWidget.getEditorPositionFromNode(mouseEvent.target);
+			if (!position) {
+				return;
+			}
+			const stopRenderingLineAfter = this._editor.getOption(EditorOption.stopRenderingLineAfter);
+			// Disable the line length render limit when clicking beyond the current render limit, i.e. on the "Show more" button
+			if (stopRenderingLineAfter >= 0 && position.column >= stopRenderingLineAfter) {
+				// Suppressing the click is just a safeguard. Since the option update causes a re-render of the sticky scroll, the
+				// clicked line is usually removed from the DOM before the click event fires. However, we do not want to rely on that
+				this._suppressNextClick = true;
+				this._editor.updateOptions({
+					stopRenderingLineAfter: -1
+				});
+			}
 		}));
 		this._register(dom.addDisposableListener(mainWindow, dom.EventType.MOUSE_MOVE, mouseEvent => {
 			this._mouseTarget = mouseEvent.target;
@@ -507,7 +529,12 @@ export class StickyScrollController extends Disposable implements IEditorContrib
 			this._readConfiguration();
 		}
 
-		if (event.hasChanged(EditorOption.lineNumbers) || event.hasChanged(EditorOption.folding) || event.hasChanged(EditorOption.showFoldingControls)) {
+		if (
+			event.hasChanged(EditorOption.lineNumbers)
+			|| event.hasChanged(EditorOption.folding)
+			|| event.hasChanged(EditorOption.showFoldingControls)
+			|| event.hasChanged(EditorOption.stopRenderingLineAfter)
+		) {
 			this._renderStickyScroll(0);
 		}
 	}

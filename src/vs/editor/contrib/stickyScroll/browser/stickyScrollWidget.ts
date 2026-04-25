@@ -444,6 +444,7 @@ class RenderedStickyLine {
 		const lineRenderingData = viewModel.getViewLineRenderingData(viewLineNumber);
 		const lineNumberOption = editor.getOption(EditorOption.lineNumbers);
 		const verticalScrollbarSize = editor.getOption(EditorOption.scrollbar).verticalScrollbarSize;
+		const stopRenderingLineAfter = editor.getOption(EditorOption.stopRenderingLineAfter);
 
 		let actualInlineDecorations: LineDecoration[];
 		try {
@@ -459,7 +460,7 @@ class RenderedStickyLine {
 			lineRenderingData.isBasicASCII, lineRenderingData.containsRTL, 0,
 			lineRenderingData.tokens, actualInlineDecorations,
 			lineRenderingData.tabSize, lineRenderingData.startVisibleColumn,
-			1, 1, 1, 500, 'none', true, true, null,
+			1, 1, 1, stopRenderingLineAfter, 'none', true, true, null,
 			textDirection, verticalScrollbarSize
 		);
 
